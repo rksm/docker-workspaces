@@ -1,0 +1,16 @@
+{
+  "name": "docker-cloxp-proxy",
+  "version": "0.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "http-proxy": "^1.8.1",
+    "lively2lively": "git://github.com/rksm/node-lively2lively.git#master",
+    "nodemon": "^1.2.1"
+  },
+  "author": "",
+  "license": "MIT"
+}
