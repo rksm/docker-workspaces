@@ -1,7 +1,38 @@
 
 var lively = {lang: require("lively.lang")};
-var exec = require("child_process").exec;
+var spawn = require("child_process").spawn;
 var debug = true;
+
+function exec(cmd, options, thenDo) {
+  if (typeof options === "function") { thenDo = options; options = null; }
+  var p = spawn("bash", ["-c", cmd], options);
+  if (typeof thenDo === "function") {
+    var stdout = "", stderr = "";
+    function gatherStdout(data) { stdout += data; }
+    function gatherStderr(data) { stderr += data; }
+    p.stdout.on('data', gatherStdout);
+    p.stderr.on('data', gatherStderr);
+    p.once('close', function(code) {
+      p.stdout.removeListener("data", gatherStdout);
+      p.stderr.removeListener("data", gatherStderr);
+      thenDo(code, stdout, stderr);
+    });
+  }
+  return p;
+}
+// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+module.exports.getPortForNewWorkspace = function(thenDo) {
+  createNewContainer(function(err, c) {
+    thenDo(err, c && c.port);
+  });
+}
+
+module.exports.isWorkspaceWithPortRunning = function(port, thenDo) {
+  whenWorkspaceReady(800, port, function(err, c) { thenDo(err, !err); });
+}
+
+module.exports.whenWorkspaceReady = whenWorkspaceReady;
 
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -56,25 +87,27 @@ m.stopContainersMatching(function(ea) { return true; }, console.log);
 
 */
 
-var dockerSentinel = null;
-function startDockerSentinel(time) {
-  time = time || 1000*60*5;
-  if (dockerSentinel) return;
-  dockerSentinel = setInterval(function() {
-    stopContainersMatching(function(ea) {
-      // console.log(Date.now() - ea.lastActive, reusableAge, lively.lang.date.relativeTo(ea.lastActive, new Date()));
-      return !ea.lastActive || (Date.now() - ea.lastActive) > reusableAge;
-    }, function() {});
-  }, 5*min);
-}
 
-function fetchRunningSpecForPort(port, thenDo) {
-  debug && console.log("port %s running?", port);
-  runningDockersCached(function(err, cs) {
-    var c = !err && lively.lang.arr.detect(cs||[], function(ea) { return ea && ea.port === port; });
-    debug && console.log("port %s running? %s", port, !!c);
-    thenDo(err, c);
-  })
+function whenWorkspaceReady(timeout, port, thenDo) {
+  if (typeof thenDo === "undefined") {
+    thenDo = port; port = timeout; timeout = 5000;
+  }
+
+  var done = false, responseSuccess = false,
+      cmd = "curl -s -S -I 0.0.0.0:" + port,
+      reqDelay = Math.floor(timeout/5);
+  function doRequest() {
+    exec(cmd, function(err) {
+      debug && console.log(port + " ready? " + !err);
+      if (!err) responseSuccess = true;
+      else if (!done) setTimeout(doRequest, reqDelay);
+    })
+  }
+  lively.lang.fun.waitFor(timeout,
+    function() { return !!responseSuccess; },
+    function(err) { done = true; thenDo(err); });
+  
+  doRequest();
 }
 
 function createNewContainer(runningContainers, thenDo) {
@@ -87,7 +120,7 @@ function createNewContainer(runningContainers, thenDo) {
     function(cs, n) {
       // "unused" are really unstarted...
       unusedContainers(ports, cs, function(err, cs) {
-        debug && console.log("Unstarted containers:", cs);
+        debug && console.log("Unstarted containers:", cs.length);
         if (err || !cs || !cs.length || !cs[0].port)
           return n(new Error("Cannot create new cloxp container!" + err ? " "+err:""));
           
@@ -115,6 +148,30 @@ function createNewContainer(runningContainers, thenDo) {
   )(thenDo);
 }
 
+// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+var dockerSentinel = null;
+function startDockerSentinel(time) {
+  time = time || 1000*60*5;
+  if (dockerSentinel) return;
+  dockerSentinel = setInterval(function() {
+    stopContainersMatching(function(ea) {
+      // console.log(Date.now() - ea.lastActive, reusableAge, lively.lang.date.relativeTo(ea.lastActive, new Date()));
+      return !ea.lastActive || (Date.now() - ea.lastActive) > reusableAge;
+    }, function() {});
+  }, 5*min);
+}
+
+function fetchRunningSpecForPort(port, thenDo) {
+  debug && console.log("port %s running?", port);
+  runningDockersCached(function(err, cs) {
+    var c = !err && lively.lang.arr.detect(cs||[], function(ea) { return ea && ea.port === port; });
+    debug && co
+    nsole.log("port %s running? %s", port, !!c);
+    thenDo(err, c);
+  })
+}
+
 
 function fetchSpecForPort(port, thenDo) {
   lively.lang.fun.composeAsync(
@@ -131,7 +188,7 @@ function stopContainersMatching( matchFunc, thenDo) {
     fetchContainerSpecs,
     function(specs, n) {
       var ma = specs.filter(matchFunc);
-      console.log(ma);
+      // console.log(ma);
       if (!ma.length) return thenDo(null, []);
       lively.lang.arr.mapAsyncSeries(ma,
         function(c,_,n) {
@@ -204,7 +261,7 @@ function runningDockers(thenDo) {
   // runningDockers(function(err, result) { global.images= result; console.log(err||result); })
   exec("docker ps | grep \"cloxp-10\"", function(error, stdout, stderr) {
     if (error) {
-      // debug && console.log("found no running containers");
+      debug && console.log("found no running containers");
       return thenDo(null, []);
     }
     

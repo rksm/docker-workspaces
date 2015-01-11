@@ -2,42 +2,176 @@
 // global.proxies = proxies;
 
 var lively = {lang: require("lively.lang")};
-var httpProxy = require('/home/lively/lively-web.org/cloxp/docker-cloxp-proxy/node_modules/http-proxy');
+var httpProxy = require('http-proxy');
 var http = require("http");
 var Cookies = require("cookies")
-var dMgr = require("./docker-manager");
+var dmgr = require("./docker-manager");
+var fs = require("fs");
+var path = require("path");
 
-var portOfLastHope = 10080;
+// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+var waitingForWorkspacePage = "/cloxp-wait.html";
+var assumeWorkspaceStillRunningTime = 1000 * 60 * 2;
+var proxies = {};
+var debug = false;
+
+// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+// server export
+
+module.exports = {
+  start: function(options, thenDo) {
+    var s = createProxyServer(options);
+    s.once("listening", function() { thenDo(null, s); });
+    return s;
+  },
+
+  stop: function(server, thenDo) {
+    server.once("close", thenDo);
+    server.close();
+  }
+
+}
+
+process.on('uncaughtException', function(err) {
+  // FIXME...
+  console.log('Caught exception: ' + (err.stack || err));
+});
+
+// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+function createProxyServer(options) {
+  var port = (options && options.port) || 9015
+
+  var proxyServer = http.createServer(handleRequest);
+  proxyServer.on('upgrade', handleWebsocketRequest);
+  proxyServer.on("error", function(e) { console.log("prioxy error: ", e); });
+  proxyServer.listen(port);
+  
+  return proxyServer;
+}
+
+// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+function handleRequest(req, res) {
+  
+  // 1. get / set time of last access. this is what we use to decide whether or
+  // not to contact docker to ask if the image still exists (expensive)
+  var lastReqT = req["workspaceManager-lastRequestTime"] = getCookieLastRequestTime(req, res);
+  setCookieLastRequestTime(req, res, Date.now());
+
+  // 2. requests to please-wait-pages don't get proxied
+  if (isWaitRequest(req, res)) return serveWaitPage(req, res);
+
+  // 3. if we don't find session data we create a new workspace
+  var assignedPort = getCookiePortAssignment(req, res);
+  if (!assignedPort) return handleNewWorkspaceRequest(req, res);
+
+  // 4. If last access time is below some limit we assume that the workspace
+  // still runs and just forward stuff
+  if (Date.now() - lastReqT < assumeWorkspaceStillRunningTime) {
+    setCookiePortAssignment(req, res, assignedPort);
+    return doProxyWebRequest(ensureProxy(assignedPort), req, res);
+  }
+
+  // 5. otherwise we ask if the workspace exists....
+  dmgr.isWorkspaceWithPortRunning(assignedPort, function(err, answer) {
+    if (!err && answer) {
+      // ...and if so, we forward
+      setCookiePortAssignment(req, res, assignedPort);
+      doProxyWebRequest(ensureProxy(assignedPort), req, res);
+    } else {
+      // ... or create a new workspace
+      handleNewWorkspaceRequest(req, res);
+    }
+  });
+}
+
+function handleWebsocketRequest(req, socket, head) {
+  var cookies = new Cookies(req, null);
+  var assigned = Number(cookies.get(cloxpCookieName));
+  socket.on("error", function(e) { console.log("socker error ", e); })
+  if (assigned && proxies[assigned]) {
+    proxies[assigned].ws(req, socket, head, function(err) { socket.end(); });
+  } else {
+    socket.end();
+  }
+}
+
+// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+function handleNewWorkspaceRequest(req, res) {
+  dmgr.getPortForNewWorkspace(function(err, port) {
+    if (err) return onErr();
+    setCookiePortAssignment(req, res, port);
+
+    if (req.url.match(/workspace-wait-redirect=false/)) {
+      dmgr.whenWorkspaceReady(port, function(err) {
+        if (err) return onErr();        
+        doProxyWebRequest(ensureProxy(port), req, res);
+      });
+    } else {
+      res.writeHead(303, {"Location": waitingForWorkspacePage});
+      res.end();
+    }
+  });
+  
+  function onErr() {
+    res.witeHead(500);
+    res.end("Could not successfully request workspace:\n" + err);
+  }
+}
+
+function serveWaitPage(req, res) {
+  var p = path.join("public/")+req.url;
+  // var assignedPort = getCookiePortAssignment(req, res);
+  // setCookiePortAssignment(req, res, assignedPort);
+  fs.exists(p, function(exists) {
+    if (!exists) res.writeHead(404, {});
+    else {
+      res.writeHead(200, {"Content-type": "text/html"})
+      var s = fs.createReadStream(p);
+      s.pipe(res);
+    }
+  });
+}
+
+function isWaitRequest(req, res) {
+  return !!req.url.match(new RegExp(waitingForWorkspacePage+"$"));
+}
 
 // dMgr.findReusableContainers;
 // dMgr.fetchContainerSpecs;
 // dMgr.startDockerSentinel;
 
+// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+// cookie action
+var portOfLastHope = 10080;
 var cloxpCookieName = "cloxp-assignment";
-var proxies = {};
-var debug = false;
+var cloxpCookieTimeName = "cloxp-last-req-time";
 
-function sendToExistingConnection(cookies, req, res, thenDo) {
-
-  var assigned = Number(cookies.get(cloxpCookieName));
-  if (!assigned) {
-    debug && console.log("send request to existing connection? ... no")
-    return thenDo(null, false); // new connection
-  } else if (proxies[assigned]) { // recent connection, handler should be around
-    proxies[assigned].web(req, res);
-    false && debug && console.log("send request to existing connection? ... yes, has proxy already:", assigned);
-    return thenDo(null, true);
-  } else { // check if con still exists...
-    dMgr.fetchRunningSpecForPort(assigned, function(err, spec) {
-      if (err || !spec) return thenDo(null, false);
-      var proxy = ensureProxy(assigned);
-      proxy.web(req, res);
-      debug && console.log(spec);
-      debug && console.log("send request to existing connection? ... yes, created proxy:", assigned);
-      thenDo(null, true);
-    });
-  }
+function getCookieVal(key, req, res) {
+  var cookies = new Cookies(req, res);
+  var val = Number(cookies.get(key));
+  return isNaN(val) ? null : val;
 }
+
+function setCookieVal(key, val, req, res) {
+  if (!val) {
+    console.warn("setCookie %s: no value", key, val);
+    return;
+  }
+  console.log(key, val, !!req, !!res);
+  new Cookies(req, res).set(key, val);
+}
+
+function getCookiePortAssignment(req, res) { return getCookieVal(cloxpCookieName, req, res); }
+function setCookiePortAssignment(req, res, v) { return setCookieVal(cloxpCookieName, v, req, res); }
+function getCookieLastRequestTime(req, res) { return getCookieVal(cloxpCookieTimeName, req, res); }
+function setCookieLastRequestTime(req, res, v) { return setCookieVal(cloxpCookieTimeName, v, req, res); }
+
+// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
 
 function ensureProxy(port) {
   var proxy = proxies[port];
@@ -53,34 +187,6 @@ function ensureProxy(port) {
   return proxy;
 }
 
-function createNewConnection(cookies, req, res, thenDo) {
-  debug && console.log("request to create new connection...");
-  dMgr.findReusableContainer(function(err, c) {
-    if (!err && c) return done(null, c);
-    else {
-      dMgr.createNewContainer(function(err, c) {
-        if (!err && c) return done(null, c);
-        if (!c) {
-          console.warn("Last attempt to serve the client: proxy to " + portOfLastHope);
-          c = {port: portOfLastHope, name: "cloxp-"+portOfLastHope};
-          thenDo(null, c);
-        }
-        thenDo(err || new Error("Could not create new container!"), false);
-      });
-    }
-  });
-
-  // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
-  function done(err, c) {
-    debug && console.log("Found reusable or new container: ", c);
-    cookies.set(cloxpCookieName, c.port);
-    var proxy = ensureProxy(c.port);
-    doProxyWebRequest(proxy, req, res);
-    return thenDo(err, !err && c);
-  }
-}
-
 function dealWithUnabilityToConnect(cookies, req, res) {
   cookies.set("cloxp-unable-to-connect", Date.now());
   if (res) {
@@ -91,19 +197,8 @@ function dealWithUnabilityToConnect(cookies, req, res) {
   }
 }
 
-function handleRequest(req, res) {
-  var cookies = new Cookies(req, res);
-  lively.lang.fun.composeAsync(
-    function(n) { sendToExistingConnection(cookies, req, res, n); },
-    function(handled, n) { handled ? n(null, true) : createNewConnection(cookies, req, res, n); }
-  )(function(err, handled) {
-    if (handled) return;
-    console.error("could not handle request! ", err);
-    dealWithUnabilityToConnect(cookies, req,res);
-  });
-}
-
 function doProxyWebRequest(proxy, req, res, attempt) {
+  debug && console.log("proxying %s", req.url);
   proxy.web(req, res, function(err) {
     if (attempt > 5) {
       console.error("proxy web request errored:", err);
@@ -116,30 +211,3 @@ function doProxyWebRequest(proxy, req, res, attempt) {
     }, 700);
   });
 }
-
-var proxyServer = http.createServer(handleRequest);
-
-//
-// Listen to the `upgrade` event and proxy the
-// WebSocket requests as well.
-//
-proxyServer.on('upgrade', function (req, socket, head) {
-  var cookies = new Cookies(req, null);
-  var assigned = Number(cookies.get(cloxpCookieName));
-  socket.on("error", function(e) { console.log("socker error ", e); })
-  if (assigned && proxies[assigned]) {
-    proxies[assigned].ws(req, socket, head, function(err) { socket.end(); });
-  } else {
-    socket.end();
-  }
-});
-
-proxyServer.on("error", function(e) {
-  console.log("prioxy error: ", e);
-});
-
-process.on('uncaughtException', function(err) {
-  console.log('Caught exception: ' + (err.stack || err));
-});
-
-proxyServer.listen(9015);
