@@ -11,6 +11,16 @@ var path = require("path");
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+var keyList;
+try {
+  if (fs.existsSync("./cookie-keys")) {
+    keyList = JSON.parse(fs.readFileSync("./cookie-keys"));
+  }
+} catch (e) {
+  console.error("error initing keygrip: ", e);
+}
+// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
 var waitingForWorkspacePage = "/cloxp-wait.html";
 var waitingForWorkspacePageImage = "/cloxp-logo-large.png";
 var assumeWorkspaceStillRunningTime = 1000 * 60 * 2;
@@ -155,7 +165,7 @@ var cloxpCookieName = "cloxp-assignment";
 var cloxpCookieTimeName = "cloxp-last-req-time";
 
 function getCookieVal(key, req, res) {
-  var cookies = new Cookies(req, res);
+  var cookies = new Cookies(req, res, keyList);
   var val = Number(cookies.get(key));
   return isNaN(val) ? null : val;
 }
@@ -165,7 +175,7 @@ function setCookieVal(key, val, req, res) {
     console.warn("setCookie %s: no value", key, val);
     return;
   }
-  new Cookies(req, res).set(key, val);
+  new Cookies(req, res, keyList).set(key, val, {httpOnly: false, signed: !!keyList});
 }
 
 function getCookiePortAssignment(req, res) { return getCookieVal(cloxpCookieName, req, res); }

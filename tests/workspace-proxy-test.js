@@ -168,8 +168,8 @@ describe("workspace proxy", function() {
 
       chai.request(baseURL)
         .get('/cloxp.html')
-        .set({'cookie': 'cloxp-last-req-time=' + (Date.now()-1000*5*60) + '; path=/; httponly; '
-                         + 'cloxp-assignment=10084; path=/; httponly; '})
+        .set({'cookie': 'cloxp-last-req-time=' + (Date.now()-1000*5*60) + '; path=/; '
+                         + 'cloxp-assignment=10084; path=/; '})
         .end(function (err, res) {
           expect(err).to.be.null;
           expect(res).to.have.cookie("cloxp-assignment", "10084");
