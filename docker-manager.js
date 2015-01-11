@@ -28,22 +28,7 @@ module.exports.getPortForNewWorkspace = function(thenDo) {
   });
 }
 
-module.exports.isWorkspaceWithPortRunning = function(port, thenDo) {
-  whenWorkspaceReady(800, port, function(err, c) { thenDo(err, !err); });
-}
-
-module.exports.whenWorkspaceReady = whenWorkspaceReady;
-
-
-// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
-module.exports.stopContainersMatching = stopContainersMatching;
-module.exports.findReusableContainer = findReusableContainer;
-module.exports.findReusableContainers = findReusableContainers;
-module.exports.fetchContainerSpecs = fetchContainerSpecs;
-module.exports.fetchRunningSpecForPort = fetchRunningSpecForPort;
-module.exports.createNewContainer = createNewContainer;
-module.exports.startDockerSentinel = startDockerSentinel;
+module.exports.isWorkspaceWithPortRunning = isWorkspaceWithPortRunning;
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -88,7 +73,7 @@ m.stopContainersMatching(function(ea) { return true; }, console.log);
 */
 
 
-function whenWorkspaceReady(timeout, port, thenDo) {
+function isWorkspaceWithPortRunning(timeout, port, thenDo) {
   if (typeof thenDo === "undefined") {
     thenDo = port; port = timeout; timeout = 5000;
   }
@@ -105,7 +90,7 @@ function whenWorkspaceReady(timeout, port, thenDo) {
   }
   lively.lang.fun.waitFor(timeout,
     function() { return !!responseSuccess; },
-    function(err) { done = true; thenDo(err); });
+    function(err) { done = true; thenDo(err, !err); });
   
   doRequest();
 }
@@ -162,26 +147,6 @@ function startDockerSentinel(time) {
   }, 5*min);
 }
 
-function fetchRunningSpecForPort(port, thenDo) {
-  debug && console.log("port %s running?", port);
-  runningDockersCached(function(err, cs) {
-    var c = !err && lively.lang.arr.detect(cs||[], function(ea) { return ea && ea.port === port; });
-    debug && co
-    nsole.log("port %s running? %s", port, !!c);
-    thenDo(err, c);
-  })
-}
-
-
-function fetchSpecForPort(port, thenDo) {
-  lively.lang.fun.composeAsync(
-    fetchContainerSpecs,
-    function(specs, n) {
-      var spec = lively.lang.arr.detect(specs, function(spec) { return spec.port == port; });
-      n(null, spec);
-    }
-  )(thenDo);
-}
 
 function stopContainersMatching( matchFunc, thenDo) {
   lively.lang.fun.composeAsync(
@@ -213,21 +178,6 @@ function unusedContainers(ports, runningContainers, thenDo) {
 //     if (err) return thenDo(err, [])
 //   })
 // }
-
-function findReusableContainer(thenDo) {
-  findReusableContainers(function(err, cs) { thenDo(err, cs ? cs[0] : null); });
-}
-
-function findReusableContainers(thenDo) {
-  lively.lang.fun.composeAsync(
-    fetchContainerSpecs,
-    function(specs, n) {
-      n(null, (specs || []).filter(function(s) {
-        return !s.lastActive || ((Date.now() - s.lastActive) > reusableAge);
-      }));
-    }
-  )(thenDo);
-}
 
 function fetchContainerSpecs(thenDo) {
   // fetchContainerSpecs(function(err, specs) { console.log(err||specs||"none"); })
