@@ -12,6 +12,7 @@ var path = require("path");
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 var waitingForWorkspacePage = "/cloxp-wait.html";
+var waitingForWorkspacePageImage = "/cloxp-logo-large.png";
 var assumeWorkspaceStillRunningTime = 1000 * 60 * 2;
 var proxies = {};
 var debug = false;
@@ -139,7 +140,8 @@ function serveWaitPage(req, res) {
 }
 
 function isWaitRequest(req, res) {
-  return !!req.url.match(new RegExp(waitingForWorkspacePage+"$"));
+  return !!req.url.match(new RegExp(waitingForWorkspacePage
+        +"|" + waitingForWorkspacePageImage + "$"));
 }
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
