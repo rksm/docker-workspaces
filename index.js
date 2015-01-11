@@ -15,12 +15,15 @@ var waitingForWorkspacePage = "/cloxp-wait.html";
 var assumeWorkspaceStillRunningTime = 1000 * 60 * 2;
 var proxies = {};
 var debug = false;
+var waitForDockerTimout = 7000;
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 // server export
 
 module.exports = {
   start: function(options, thenDo) {
+    options = options || {};
+    if (options.waitForDockerTimout) waitForDockerTimout = options.waitForDockerTimout;
     var s = createProxyServer(options);
     s.once("listening", function() { thenDo(null, s); });
     return s;
@@ -75,7 +78,7 @@ function handleRequest(req, res) {
   }
 
   // 5. otherwise we ask if the workspace exists....
-  dmgr.isWorkspaceWithPortRunning(assignedPort, function(err, answer) {
+  dmgr.isWorkspaceWithPortRunning(waitForDockerTimout, assignedPort, function(err, answer) {
     if (!err && answer) {
       // ...and if so, we forward
       setCookiePortAssignment(req, res, assignedPort);
@@ -88,11 +91,10 @@ function handleRequest(req, res) {
 }
 
 function handleWebsocketRequest(req, socket, head) {
-  var cookies = new Cookies(req, null);
-  var assigned = Number(cookies.get(cloxpCookieName));
+  var assignedPort = getCookiePortAssignment(req, null);
   socket.on("error", function(e) { console.log("socker error ", e); })
-  if (assigned && proxies[assigned]) {
-    proxies[assigned].ws(req, socket, head, function(err) { socket.end(); });
+  if (assignedPort && ensureProxy(assignedPort)) {
+    ensureProxy(assignedPort).ws(req, socket, head, function(err) { socket.end(); });
   } else {
     socket.end();
   }
@@ -102,12 +104,12 @@ function handleWebsocketRequest(req, socket, head) {
 
 function handleNewWorkspaceRequest(req, res) {
   dmgr.getPortForNewWorkspace(function(err, port) {
-    if (err) return onErr();
+    if (err) return onErr(err);
     setCookiePortAssignment(req, res, port);
 
     if (req.url.match(/workspace-wait-redirect=false/)) {
-      dmgr.whenWorkspaceReady(port, function(err) {
-        if (err) return onErr();        
+      dmgr.isWorkspaceWithPortRunning(waitForDockerTimout, port, function(err) {
+        if (err) return onErr(err);        
         doProxyWebRequest(ensureProxy(port), req, res);
       });
     } else {
@@ -116,7 +118,7 @@ function handleNewWorkspaceRequest(req, res) {
     }
   });
   
-  function onErr() {
+  function onErr(err) {
     res.witeHead(500);
     res.end("Could not successfully request workspace:\n" + err);
   }
@@ -140,10 +142,6 @@ function isWaitRequest(req, res) {
   return !!req.url.match(new RegExp(waitingForWorkspacePage+"$"));
 }
 
-// dMgr.findReusableContainers;
-// dMgr.fetchContainerSpecs;
-// dMgr.startDockerSentinel;
-
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 // cookie action
 var portOfLastHope = 10080;
@@ -161,7 +159,6 @@ function setCookieVal(key, val, req, res) {
     console.warn("setCookie %s: no value", key, val);
     return;
   }
-  console.log(key, val, !!req, !!res);
   new Cookies(req, res).set(key, val);
 }
 
@@ -198,9 +195,8 @@ function dealWithUnabilityToConnect(cookies, req, res) {
 }
 
 function doProxyWebRequest(proxy, req, res, attempt) {
-  debug && console.log("proxying %s", req.url);
   proxy.web(req, res, function(err) {
-    if (attempt > 5) {
+    if (attempt > 4) {
       console.error("proxy web request errored:", err);
       res.statusCode = 500;
       res.end("Could not reach cloxp server, sorry.");
@@ -208,6 +204,6 @@ function doProxyWebRequest(proxy, req, res, attempt) {
     }
     setTimeout(function() {
       doProxyWebRequest(proxy, req, res, (attempt||0)+1);
-    }, 700);
+    }, 200);
   });
 }

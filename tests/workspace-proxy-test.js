@@ -70,7 +70,7 @@ describe("workspace proxy", function() {
 
   beforeEach(function(thenDo) {
     lively.lang.fun.waitForAll([
-      function(n) { server.start({port: port}, function(err, _app) { app = _app; n(err); }); },
+      function(n) { server.start({waitForDockerTimout: 800, port: port}, function(err, _app) { app = _app; n(err); }); },
       function(n) { pseudoWorkspaceServer1 = startPseudoServer(10081, n); },
       function(n) { pseudoWorkspaceServer2 = startPseudoServer(10084, n); }
     ], thenDo);
