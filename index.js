@@ -61,19 +61,22 @@ function handleRequest(req, res) {
   
   // 1. get / set time of last access. this is what we use to decide whether or
   // not to contact docker to ask if the image still exists (expensive)
+  var assignedPort = getCookiePortAssignment(req, res);
   var lastReqT = req["workspaceManager-lastRequestTime"] = getCookieLastRequestTime(req, res);
   setCookieLastRequestTime(req, res, Date.now());
 
   // 2. requests to please-wait-pages don't get proxied
-  if (isWaitRequest(req, res)) return serveWaitPage(req, res);
+  if (isWaitRequest(req, res)) {
+    assignedPort && setCookiePortAssignment(req, req, assignedPort);
+    return serveWaitPage(req, res);
+  }
 
   // 3. if we don't find session data we create a new workspace
-  var assignedPort = getCookiePortAssignment(req, res);
   if (!assignedPort) return handleNewWorkspaceRequest(req, res);
 
   // 4. If last access time is below some limit we assume that the workspace
   // still runs and just forward stuff
-  if (Date.now() - lastReqT < assumeWorkspaceStillRunningTime) {
+  if (lastReqT && Date.now() - lastReqT < assumeWorkspaceStillRunningTime) {
     setCookiePortAssignment(req, res, assignedPort);
     return doProxyWebRequest(ensureProxy(assignedPort), req, res);
   }
@@ -82,6 +85,7 @@ function handleRequest(req, res) {
   dmgr.isWorkspaceWithPortRunning(waitForDockerTimout, assignedPort, function(err, answer) {
     if (!err && answer) {
       // ...and if so, we forward
+      setCookieLastRequestTime(req, res, Date.now());
       setCookiePortAssignment(req, res, assignedPort);
       doProxyWebRequest(ensureProxy(assignedPort), req, res);
     } else {
